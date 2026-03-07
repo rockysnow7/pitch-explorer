@@ -285,6 +285,15 @@ def make_strike_zone_figure(
     return fig
 
 
+def make_plotly_options(fig: go.Figure) -> dict:
+    options = fig.to_plotly_json()
+    options["config"] = {
+        "displayModeBar": False,
+        "displaylogo": False,
+    }
+    return options
+
+
 PROBABILITY_METRIC_KEYS = ("S", "B", "X", "swing", "take")
 
 
@@ -373,11 +382,13 @@ def build_app() -> None:
         return "\n".join(lines)
 
     def update_chart() -> None:
-        chart.figure = make_strike_zone_figure(
-            state.pitch_x,
-            state.pitch_z,
-            state.outcome_probs,
-            state.selected_metric,
+        chart.figure = make_plotly_options(
+            make_strike_zone_figure(
+                state.pitch_x,
+                state.pitch_z,
+                state.outcome_probs,
+                state.selected_metric,
+            )
         )
         chart.update()
 
@@ -745,11 +756,13 @@ def build_app() -> None:
 
         with ui.column().classes("flex-1 min-w-0 items-center"):
             chart = ui.plotly(
-                make_strike_zone_figure(
-                    state.pitch_x,
-                    state.pitch_z,
-                    state.outcome_probs,
-                    state.selected_metric,
+                make_plotly_options(
+                    make_strike_zone_figure(
+                        state.pitch_x,
+                        state.pitch_z,
+                        state.outcome_probs,
+                        state.selected_metric,
+                    )
                 )
             ).classes("w-full").style("max-width: 1100px;")
 
