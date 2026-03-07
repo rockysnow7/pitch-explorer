@@ -27,25 +27,48 @@ PITCH_TYPES = {
     "Forkball": "fo",
 }
 
+HANDEDNESS_OPTIONS = ["L", "R"]
+INNING_HALVES = ["Top", "Bot"]
+
 PLATE_HEIGHT = 3.0
 X_AXIS_RANGE = (-1.35, 1.35)
 Y_AXIS_RANGE = (-0.35, PLATE_HEIGHT + 0.35)
 
 give = 1
-xs = np.linspace(-1 - give, 1 + give, 40)
-zs = np.linspace(Y_AXIS_RANGE[0] / PLATE_HEIGHT, Y_AXIS_RANGE[1] / PLATE_HEIGHT, 40)
+num_points = 70
+xs = np.linspace(-1 - give, 1 + give, num_points)
+zs = np.linspace(Y_AXIS_RANGE[0] / PLATE_HEIGHT, Y_AXIS_RANGE[1] / PLATE_HEIGHT, num_points)
 
 
 @dataclass
 class AppState:
     release_speed: float = 90
     pitch_type_name: str = next(iter(PITCH_TYPES))
+    p_throws: str = "L"
+    stand: str = "R"
+    inning_topbot: str = "Top"
+    inning: int = 9
+    bat_score: int = 0
+    fld_score: int = 0
+    outs_when_up: int = 0
+    on_3b: bool = True
+    on_2b: bool = True
+    on_1b: bool = True
+    pfx_x: float = 0.0
+    pfx_z: float = 0.0
+    k_rate: float = 0.236
+    bb_rate: float = 0.183
+    prev_pitch_type_name: str | None = None
+    prev_type: str | None = None
+    prev_pitch_x: float | None = None
+    prev_pitch_z: float | None = None
     pitch_x: float | None = None
     pitch_z: float | None = None
     balls: int = 0
     strikes: int = 0
     swing_features: SwingFeatures | None = None
     selected_metric: str = "S"
+    optimization_direction: str = "max"
     outcome_probs: pd.DataFrame | None = None
 
 
@@ -73,54 +96,76 @@ METRIC_OPTIONS = {
     "take": "Take",
 }
 
+OPTIMIZATION_DIRECTIONS = {
+    "max": "Maximize selected metric",
+    "min": "Minimize selected metric",
+}
 
-def make_swing_grid_features(state: AppState) -> pd.DataFrame:
+PREV_PITCH_RESULT_OPTIONS = {
+    "none": "None",
+    "B": "Ball",
+    "S": "Strike",
+    "X": "In-play",
+}
+
+
+def make_swing_grid_features(state: AppState, pitch_type_name: str | None = None) -> pd.DataFrame:
+    selected_pitch_type = pitch_type_name or state.pitch_type_name
     rows: list[dict] = []
     for x in xs:
         for z in zs:
             rows.append(
                 SwingFeatures(
-                    p_throws="L",
-                    stand="R",
-                    inning_topbot="Top",
-                    prev_pitch_type=None,
-                    prev_type=None,
-                    pitch_type=PITCH_TYPES[state.pitch_type_name],
-                    inning=9,
-                    bat_score=0,
-                    fld_score=0,
-                    outs_when_up=0,
-                    on_3b=True,
-                    on_2b=True,
-                    on_1b=True,
+                    p_throws=state.p_throws,
+                    stand=state.stand,
+                    inning_topbot=state.inning_topbot,
+                    prev_pitch_type=(
+                        PITCH_TYPES[state.prev_pitch_type_name] if state.prev_pitch_type_name is not None else None
+                    ),
+                    prev_type=state.prev_type,
+                    pitch_type=PITCH_TYPES[selected_pitch_type],
+                    inning=state.inning,
+                    bat_score=state.bat_score,
+                    fld_score=state.fld_score,
+                    outs_when_up=state.outs_when_up,
+                    on_3b=state.on_3b,
+                    on_2b=state.on_2b,
+                    on_1b=state.on_1b,
                     balls=state.balls,
                     strikes=state.strikes,
                     release_speed=state.release_speed,
-                    pfx_x=0,
-                    pfx_z=0,
-                    K_rate=0.25,
-                    BB_rate=0.25,
+                    pfx_x=state.pfx_x,
+                    pfx_z=state.pfx_z,
+                    K_rate=state.k_rate,
+                    BB_rate=state.bb_rate,
                     px=float(x),
                     pz=float(z),
-                    prev_px=None,
-                    prev_pz=None,
+                    prev_px=state.prev_pitch_x,
+                    prev_pz=state.prev_pitch_z,
                 ).to_dict()
             )
     return pd.DataFrame(rows)
 
 
 def make_bsx_grid_features(state: AppState, swing: bool) -> pd.DataFrame:
+    selected_pitch_type = state.pitch_type_name
+    return make_bsx_grid_features_for_pitch_type(state, swing, selected_pitch_type)
+
+
+def make_bsx_grid_features_for_pitch_type(
+    state: AppState, swing: bool, pitch_type_name: str
+) -> pd.DataFrame:
     rows: list[dict] = []
     for x in xs:
         for z in zs:
             rows.append(
                 BSXFeatures(
-                    p_throws="L",
-                    stand="R",
-                    pitch_type=PITCH_TYPES[state.pitch_type_name],
+                    p_throws=state.p_throws,
+                    stand=state.stand,
+                    pitch_type=PITCH_TYPES[pitch_type_name],
                     release_speed=state.release_speed,
-                    pfx_x=0,
-                    pfx_z=0,
+                    pfx_x=state.pfx_x,
+                    pfx_z=state.pfx_z,
                     px=float(x),
                     pz=float(z),
                     swing=swing,
@@ -218,6 +263,8 @@ def make_strike_zone_figure(
     fig.update_layout(
         clickmode="event",
         dragmode=False,
+        width=1100,
+        height=800,
         yaxis=go.layout.YAxis(
             scaleanchor="x",
             scaleratio=1,
@@ -244,11 +291,19 @@ PROBABILITY_METRIC_KEYS = ("S", "B", "X", "swing", "take")
 def build_app() -> None:
     state = AppState()
 
+    def recompute_and_refresh() -> None:
+        precompute_outcome_probs()
+        update_chart()
+        update_selected_metric_label()
+
     def precompute_outcome_probs() -> None:
-        swing_features_df = make_swing_grid_features(state)
+        state.outcome_probs = compute_outcome_probs_for_pitch_type(state.pitch_type_name)
+
+    def compute_outcome_probs_for_pitch_type(pitch_type_name: str) -> pd.DataFrame:
+        swing_features_df = make_swing_grid_features(state, pitch_type_name=pitch_type_name)
         p_swing_false, p_swing_true = predict_swing_batch(swing_features_df)
-        bsx_features_df_swing = make_bsx_grid_features(state, swing=True)
-        bsx_features_df_take = make_bsx_grid_features(state, swing=False)
+        bsx_features_df_swing = make_bsx_grid_features_for_pitch_type(state, swing=True, pitch_type_name=pitch_type_name)
+        bsx_features_df_take = make_bsx_grid_features_for_pitch_type(state, swing=False, pitch_type_name=pitch_type_name)
         bsx_probs_swing = predict_bsx_batch(bsx_features_df_swing)
         bsx_probs_take = predict_bsx_batch(bsx_features_df_take)
         p_strike = bsx_probs_swing["p_S"] * p_swing_true + bsx_probs_take["p_S"] * p_swing_false
@@ -267,7 +322,30 @@ def build_app() -> None:
         )
         lookup["x_key"] = lookup["x"].round(6)
         lookup["z_key"] = lookup["z"].round(6)
-        state.outcome_probs = lookup.set_index(["x_key", "z_key"])
+        return lookup.set_index(["x_key", "z_key"])
+
+    def find_optimal_pitch_type_and_location() -> tuple[str, float, float, float]:
+        metric_col = METRIC_COLUMNS[state.selected_metric]
+        find_max = state.optimization_direction == "max"
+
+        best_pitch_type = state.pitch_type_name
+        best_x = float(xs[0])
+        best_z = float(zs[0])
+        best_value = -np.inf if find_max else np.inf
+
+        for pitch_type_name in PITCH_TYPES:
+            outcome_probs = compute_outcome_probs_for_pitch_type(pitch_type_name)
+            metric_series = outcome_probs[metric_col]
+            best_idx = metric_series.idxmax() if find_max else metric_series.idxmin()
+            metric_value = float(metric_series.loc[best_idx])
+            x_key, z_key = best_idx
+            if (find_max and metric_value > best_value) or (not find_max and metric_value < best_value):
+                best_pitch_type = pitch_type_name
+                best_x = float(x_key)
+                best_z = float(z_key)
+                best_value = metric_value
+
+        return best_pitch_type, best_x, best_z, best_value
 
     def position_text() -> str:
         if state.pitch_x is None or state.pitch_z is None:
@@ -304,48 +382,75 @@ def build_app() -> None:
         chart.update()
 
     def update_selected_metric_label() -> None:
-        selected_metric_label.set_text(all_metrics_text() or "")
+        metrics_label.set_text(all_metrics_text() or "")
 
     precompute_outcome_probs()
 
-    with ui.row().classes("w-full items-start no-wrap"):
-        with ui.column().classes("w-90"):
+    with ui.row().classes("w-full items-start no-wrap gap-4"):
+        with ui.column().classes("shrink-0").style(
+            "width: 360px; max-height: calc(100vh - 24px); overflow-y: auto; padding-right: 0.5rem;"
+        ):
             ui.label("Pitch Explorer").classes("text-h6")
 
             def on_pitch_type_change(event) -> None:
                 state.pitch_type_name = str(event.value)
-                precompute_outcome_probs()
-                update_chart()
-                update_selected_metric_label()
+                recompute_and_refresh()
 
             def on_release_speed_change(event) -> None:
                 state.release_speed = float(event.value)
                 speed_label.set_text(f"Release speed: {state.release_speed:.0f} mph")
-                precompute_outcome_probs()
-                update_chart()
-                update_selected_metric_label()
+                recompute_and_refresh()
 
             def on_metric_change(event) -> None:
                 state.selected_metric = str(event.value)
                 update_chart()
                 update_selected_metric_label()
 
-            with ui.row().classes("w-full items-center justify-between gap-3"):
-                ui.slider(
-                    min=70,
-                    max=105,
-                    step=1,
-                    value=state.release_speed,
-                    on_change=on_release_speed_change,
-                ).classes("w-full")
-                speed_label = ui.label(f"Release speed: {state.release_speed:.0f} mph").classes("text-caption")
+            def on_find_optimal_click() -> None:
+                best_pitch_type, best_x, best_z, best_value = find_optimal_pitch_type_and_location()
+                state.pitch_type_name = best_pitch_type
+                state.pitch_x = best_x
+                state.pitch_z = best_z
+                precompute_outcome_probs()
+                update_chart()
+                selected_location.set_text(position_text())
+                update_selected_metric_label()
+                if pitch_type_select.value != best_pitch_type:
+                    pitch_type_select.set_value(best_pitch_type)
+                direction_text = "Maximized" if state.optimization_direction == "max" else "Minimized"
+                optimization_result_label.set_text(
+                    f"{direction_text} {METRIC_LABELS[state.selected_metric]} with\n"
+                    f"Pitch type: {best_pitch_type}\n"
+                    f"Location: x={best_x:.2f}, z={best_z:.2f}\n"
+                    f"Probability: {best_value:.3f}"
+                )
 
-            ui.select(
-                options=list(PITCH_TYPES.keys()),
-                value=state.pitch_type_name,
-                label="Pitch type",
-                on_change=on_pitch_type_change,
-            ).classes("w-full")
+            def previous_pitch_text() -> str:
+                prev_pitch_label = state.prev_pitch_type_name or "None"
+                prev_type_label = state.prev_type or "None"
+                if state.prev_pitch_x is None or state.prev_pitch_z is None:
+                    prev_loc_label = "None"
+                else:
+                    prev_loc_label = f"x={state.prev_pitch_x:.2f}, z={state.prev_pitch_z:.2f}"
+                return f"Previous pitch: {prev_pitch_label} | Result: {prev_type_label} | Location: {prev_loc_label}"
+
+            def refresh_previous_pitch_label() -> None:
+                previous_pitch_label.set_text(previous_pitch_text())
+
+            def on_use_current_as_previous_click() -> None:
+                state.prev_pitch_type_name = state.pitch_type_name
+                if state.pitch_x is not None and state.pitch_z is not None:
+                    state.prev_pitch_x = float(state.pitch_x)
+                    state.prev_pitch_z = float(state.pitch_z)
+                if prev_pitch_type_select.value != state.pitch_type_name:
+                    prev_pitch_type_select.set_value(state.pitch_type_name)
+                if state.prev_pitch_x is not None:
+                    prev_pitch_x_number.set_value(state.prev_pitch_x)
+                if state.prev_pitch_z is not None:
+                    prev_pitch_z_number.set_value(state.prev_pitch_z)
+                refresh_previous_pitch_label()
+                recompute_and_refresh()
+
             ui.select(
                 options=METRIC_OPTIONS,
                 value=state.selected_metric,
@@ -354,11 +459,291 @@ def build_app() -> None:
             ).classes("w-full")
 
             selected_location = ui.label(position_text())
+            metrics_label = ui.label(all_metrics_text() or "").classes("whitespace-pre-line")
+            previous_pitch_label = ui.label(previous_pitch_text()).classes("text-caption")
 
-            # count = ui.label(count_text() or "")
-            selected_metric_label = ui.label(all_metrics_text() or "").classes("whitespace-pre-line")
+            with ui.expansion("Game context", icon="sports_baseball", value=True).classes("w-full"):
+                with ui.column().classes("w-full gap-3"):
+                    with ui.row().classes("w-full gap-3"):
+                        ui.select(
+                            options=HANDEDNESS_OPTIONS,
+                            value=state.p_throws,
+                            label="Pitcher hand",
+                            on_change=lambda event: (
+                                setattr(state, "p_throws", str(event.value)),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+                        ui.select(
+                            options=HANDEDNESS_OPTIONS,
+                            value=state.stand,
+                            label="Batter stand",
+                            on_change=lambda event: (
+                                setattr(state, "stand", str(event.value)),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+                        ui.select(
+                            options=INNING_HALVES,
+                            value=state.inning_topbot,
+                            label="Inning half",
+                            on_change=lambda event: (
+                                setattr(state, "inning_topbot", str(event.value)),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
 
-        with ui.column().classes("w-full"):
+                    with ui.row().classes("w-full gap-3"):
+                        ui.number(
+                            label="Inning",
+                            value=state.inning,
+                            min=1,
+                            max=15,
+                            precision=0,
+                            on_change=lambda event: (
+                                setattr(state, "inning", int(event.value or 1)),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+                        ui.number(
+                            label="Balls",
+                            value=state.balls,
+                            min=0,
+                            max=3,
+                            precision=0,
+                            on_change=lambda event: (
+                                setattr(state, "balls", int(event.value or 0)),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+                        ui.number(
+                            label="Strikes",
+                            value=state.strikes,
+                            min=0,
+                            max=2,
+                            precision=0,
+                            on_change=lambda event: (
+                                setattr(state, "strikes", int(event.value or 0)),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+                        ui.number(
+                            label="Outs",
+                            value=state.outs_when_up,
+                            min=0,
+                            max=2,
+                            precision=0,
+                            on_change=lambda event: (
+                                setattr(state, "outs_when_up", int(event.value or 0)),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+
+                    with ui.row().classes("w-full gap-3"):
+                        ui.number(
+                            label="Batting score",
+                            value=state.bat_score,
+                            min=0,
+                            max=30,
+                            precision=0,
+                            on_change=lambda event: (
+                                setattr(state, "bat_score", int(event.value or 0)),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+                        ui.number(
+                            label="Fielding score",
+                            value=state.fld_score,
+                            min=0,
+                            max=30,
+                            precision=0,
+                            on_change=lambda event: (
+                                setattr(state, "fld_score", int(event.value or 0)),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+
+                    with ui.row().classes("w-full gap-5"):
+                        ui.checkbox(
+                            "Runner on 1B",
+                            value=state.on_1b,
+                            on_change=lambda event: (
+                                setattr(state, "on_1b", bool(event.value)),
+                                recompute_and_refresh(),
+                            ),
+                        )
+                        ui.checkbox(
+                            "Runner on 2B",
+                            value=state.on_2b,
+                            on_change=lambda event: (
+                                setattr(state, "on_2b", bool(event.value)),
+                                recompute_and_refresh(),
+                            ),
+                        )
+                        ui.checkbox(
+                            "Runner on 3B",
+                            value=state.on_3b,
+                            on_change=lambda event: (
+                                setattr(state, "on_3b", bool(event.value)),
+                                recompute_and_refresh(),
+                            ),
+                        )
+
+                    with ui.row().classes("w-full items-center justify-between gap-1"):
+                        ui.slider(
+                            min=0.0,
+                            max=0.5,
+                            step=0.01,
+                            value=state.k_rate,
+                            on_change=lambda event: (
+                                setattr(state, "k_rate", float(event.value)),
+                                k_rate_label.set_text(f"Batter K%: {state.k_rate:.2%}"),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+                        k_rate_label = ui.label(f"Batter K%: {state.k_rate:.2%}").classes("text-caption")
+
+                    with ui.row().classes("w-full items-center justify-between gap-1"):
+                        ui.slider(
+                            min=0.0,
+                            max=0.5,
+                            step=0.01,
+                            value=state.bb_rate,
+                            on_change=lambda event: (
+                                setattr(state, "bb_rate", float(event.value)),
+                                bb_rate_label.set_text(f"Batter BB%: {state.bb_rate:.2%}"),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+                        bb_rate_label = ui.label(f"Batter BB%: {state.bb_rate:.2%}").classes("text-caption")
+
+                    with ui.separator().classes("w-full"):
+                        pass
+
+                    ui.label("Previous pitch context").classes("text-subtitle2")
+
+                    prev_pitch_type_options = {"none": "None", **{name: name for name in PITCH_TYPES}}
+                    prev_pitch_type_select = ui.select(
+                        options=prev_pitch_type_options,
+                        value="none" if state.prev_pitch_type_name is None else state.prev_pitch_type_name,
+                        label="Previous pitch type",
+                        on_change=lambda event: (
+                            setattr(
+                                state,
+                                "prev_pitch_type_name",
+                                None if str(event.value) == "none" else str(event.value),
+                            ),
+                            refresh_previous_pitch_label(),
+                            recompute_and_refresh(),
+                        ),
+                    ).classes("w-full")
+
+                    ui.select(
+                        options=PREV_PITCH_RESULT_OPTIONS,
+                        value="none" if state.prev_type is None else state.prev_type,
+                        label="Previous pitch result",
+                        on_change=lambda event: (
+                            setattr(state, "prev_type", None if str(event.value) == "none" else str(event.value)),
+                            refresh_previous_pitch_label(),
+                            recompute_and_refresh(),
+                        ),
+                    ).classes("w-full")
+
+                    with ui.row().classes("w-full gap-3"):
+                        prev_pitch_x_number = ui.number(
+                            label="Previous pitch x",
+                            value=state.prev_pitch_x,
+                            min=float(X_AXIS_RANGE[0]),
+                            max=float(X_AXIS_RANGE[1]),
+                            step=0.01,
+                            on_change=lambda event: (
+                                setattr(
+                                    state,
+                                    "prev_pitch_x",
+                                    None if event.value in (None, "") else float(event.value),
+                                ),
+                                refresh_previous_pitch_label(),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+                        prev_pitch_z_number = ui.number(
+                            label="Previous pitch z",
+                            value=state.prev_pitch_z,
+                            min=float(zs.min()),
+                            max=float(zs.max()),
+                            step=0.01,
+                            on_change=lambda event: (
+                                setattr(
+                                    state,
+                                    "prev_pitch_z",
+                                    None if event.value in (None, "") else float(event.value),
+                                ),
+                                refresh_previous_pitch_label(),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+
+                    ui.button("Use current pitch as previous", on_click=on_use_current_as_previous_click).classes("w-full")
+
+            with ui.expansion("Pitch controls", icon="tune", value=False).classes("w-full"):
+                with ui.column().classes("w-full gap-3"):
+                    pitch_type_select = ui.select(
+                        options=list(PITCH_TYPES.keys()),
+                        value=state.pitch_type_name,
+                        label="Pitch type",
+                        on_change=on_pitch_type_change,
+                    ).classes("w-full")
+
+                    with ui.row().classes("w-full items-center justify-between gap-1"):
+                        ui.slider(
+                            min=70,
+                            max=105,
+                            step=1,
+                            value=state.release_speed,
+                            on_change=on_release_speed_change,
+                        ).classes("w-full")
+                        speed_label = ui.label(f"Release speed: {state.release_speed:.0f} mph").classes("text-caption")
+
+                    with ui.row().classes("w-full items-center justify-between gap-1"):
+                        ui.slider(
+                            min=-2,
+                            max=2,
+                            step=0.05,
+                            value=state.pfx_x,
+                            on_change=lambda event: (
+                                setattr(state, "pfx_x", float(event.value)),
+                                pfx_x_label.set_text(f"pfx_x: {state.pfx_x:.2f}"),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+                        pfx_x_label = ui.label(f"pfx_x: {state.pfx_x:.2f}").classes("text-caption")
+
+                    with ui.row().classes("w-full items-center justify-between gap-1"):
+                        ui.slider(
+                            min=-2,
+                            max=2,
+                            step=0.05,
+                            value=state.pfx_z,
+                            on_change=lambda event: (
+                                setattr(state, "pfx_z", float(event.value)),
+                                pfx_z_label.set_text(f"pfx_z: {state.pfx_z:.2f}"),
+                                recompute_and_refresh(),
+                            ),
+                        ).classes("w-full")
+                        pfx_z_label = ui.label(f"pfx_z: {state.pfx_z:.2f}").classes("text-caption")
+
+            with ui.expansion("Optimization", icon="query_stats", value=False).classes("w-full"):
+                with ui.column().classes("w-full gap-3"):
+                    ui.select(
+                        options=OPTIMIZATION_DIRECTIONS,
+                        value=state.optimization_direction,
+                        label="Objective",
+                        on_change=lambda event: setattr(state, "optimization_direction", str(event.value)),
+                    ).classes("w-full")
+                    ui.button("Find best pitch type + location", on_click=on_find_optimal_click).classes("w-full")
+                    optimization_result_label = ui.label("").classes("whitespace-pre-line text-caption")
+
+        with ui.column().classes("flex-1 min-w-0 items-center"):
             chart = ui.plotly(
                 make_strike_zone_figure(
                     state.pitch_x,
@@ -366,7 +751,7 @@ def build_app() -> None:
                     state.outcome_probs,
                     state.selected_metric,
                 )
-            ).classes("w-full")
+            ).classes("w-full").style("max-width: 1100px;")
 
             def on_plot_click(event) -> None:
                 args = event.args or {}
