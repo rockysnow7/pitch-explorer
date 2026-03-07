@@ -1,0 +1,6 @@
+__pycache__/
+.claude/
+.venv/
+*.png
+models/
+*.csv
