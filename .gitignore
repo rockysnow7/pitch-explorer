@@ -1,6 +1,6 @@
 __pycache__/
 .claude/
 .venv/
-*.png
+calibration_*.png
 models/
 *.csv

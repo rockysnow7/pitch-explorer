@@ -1,0 +1,10 @@
+pybaseball
+pandas
+numpy
+matplotlib
+plotly
+nicegui
+fastai
+tqdm
+scikit-learn
+torch
