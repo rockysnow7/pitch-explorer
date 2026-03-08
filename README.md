@@ -2,7 +2,7 @@
 
 Pitch Explorer is a tool for viewing the probabilities of different pitch outcomes given pitch characteristics, pitcher/batter characteristics, game context, etc.
 
-# examples
+## examples
 
 You can explore questions like:
 
@@ -14,7 +14,7 @@ You can explore questions like:
 
 ![swing probability](images/screenshot-swing.png)
 
-# usage
+## usage
 
 1. Clone this repository.
 2. Run `pip install -r requirements.txt` to install the dependencies.
@@ -22,7 +22,7 @@ You can explore questions like:
 4. Run `python train_bsx_model.py` and `python train_swing_model.py` to train the models.
 5. Run `python gui.py` to start the GUI.
 
-# notes
+## notes
 
 - The models are trained on data from the 2024 and 2025 regular seasons.
 - They can definitely be improved!! And if you do improve them, it shouldn't be too hard to update the GUI accordingly.
