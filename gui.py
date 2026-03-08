@@ -83,17 +83,9 @@ METRIC_COLUMNS = {
 METRIC_LABELS = {
     "S": "P(strike)",
     "B": "P(ball)",
-    "X": "P(in-play)",
+    "X": "P(in play)",
     "swing": "P(swing)",
     "take": "P(take)",
-}
-
-METRIC_OPTIONS = {
-    "S": "Strike",
-    "B": "Ball",
-    "X": "In-play",
-    "swing": "Swing",
-    "take": "Take",
 }
 
 OPTIMIZATION_DIRECTIONS = {
@@ -263,7 +255,7 @@ def make_strike_zone_figure(
     fig.update_layout(
         clickmode="event",
         dragmode=False,
-        width=1100,
+        width=1000,
         height=800,
         yaxis=go.layout.YAxis(
             scaleanchor="x",
@@ -463,7 +455,7 @@ def build_app() -> None:
                 recompute_and_refresh()
 
             ui.select(
-                options=METRIC_OPTIONS,
+                options=METRIC_LABELS,
                 value=state.selected_metric,
                 label="Displayed metric",
                 on_change=on_metric_change,
@@ -473,7 +465,7 @@ def build_app() -> None:
             metrics_label = ui.label(all_metrics_text() or "").classes("whitespace-pre-line")
             previous_pitch_label = ui.label(previous_pitch_text()).classes("text-caption")
 
-            with ui.expansion("Game context", icon="sports_baseball", value=True).classes("w-full"):
+            with ui.expansion("Game context", icon="sports_baseball", value=False).classes("w-full"):
                 with ui.column().classes("w-full gap-3"):
                     with ui.row().classes("w-full gap-3"):
                         ui.select(
