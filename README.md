@@ -6,11 +6,11 @@ Pitch Explorer is a tool for viewing the probabilities of different pitch outcom
 
 You can explore questions like:
 
-- Given a leftie pitching 96 mph at a rightie, what pitch type/location is most likely to result in a strike?
+- Given a leftie pitching 96 mph at a rightie, what pitch type/location is most likely to result in a strike? (Answer: A splitter in the top-left corner.)
 
 ![maximising strike probability](images/screenshot-strike.png)
 
-- What is the probability that a leftie batter will swing at an 81 mph splitter in the top right corner from a rightie pitcher in the top of the third inning on a 2-1 count with the bases loaded and two outs?
+- What is the probability that a leftie batter will swing at an 81 mph splitter in the top-right corner from a rightie pitcher in the top of the third inning on a 2-1 count with the bases loaded and two outs? (Answer: P=0.24)
 
 ![swing probability](images/screenshot-swing.png)
 
